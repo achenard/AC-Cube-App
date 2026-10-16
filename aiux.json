@@ -1,0 +1,11 @@
+{
+  "name": "OctBuildEx",
+  "basename": "octbuildex",
+  "landing": "/home",
+  "development": {
+    "token": ""
+  },
+  "build": {
+    "exclude": ["**/*.test.js", "**/test/**"]
+  }
+}

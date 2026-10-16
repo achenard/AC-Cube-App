@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rubik's Tic Tac Toe</title>
+<style>
+  :root { --bg:#14161c; --panel:#1e222b; --text:#e8eaf0; --muted:#9aa3b5; --x:#1565c0; --o:#d32f2f; --gold:#ffc400; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font-family: system-ui, Segoe UI, Roboto, sans-serif; }
+  body { display:flex; flex-direction:column; }
+  header { padding:12px 16px; text-align:center; background:var(--panel); border-bottom:1px solid #2c3140; }
+  header h1 { margin:0 0 4px; font-size:1.15rem; }
+  #status { font-size:1rem; min-height:1.4em; }
+  #status .x { color:#64a8ff; font-weight:700; }
+  #status .o { color:#ff7b72; font-weight:700; }
+  #hint { color:var(--muted); font-size:.85rem; margin-top:2px; }
+  .stage { flex:1; min-height:300px; position:relative; perspective:1400px; overflow:hidden; cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; }
+  .stage:active { cursor:grabbing; }
+  #cube { position:absolute; left:50%; top:50%; width:0; height:0; transform-style:preserve-3d; }
+  .group, .cubie { position:absolute; left:0; top:0; width:0; height:0; transform-style:preserve-3d; }
+  .face, .sticker { position:absolute; backface-visibility:hidden; -webkit-backface-visibility:hidden; }
+  .face { background:#0c0c0e; border:1px solid #000; }
+  .sticker { background:#f4f4f2; border-radius:12%; display:flex; align-items:center; justify-content:center; font-weight:800; font-family: Arial Black, Arial, sans-serif; }
+  .sticker.X { color:var(--x); } .sticker.O { color:var(--o); }
+  .stage.place .sticker.empty { cursor:pointer; }
+  .stage.place .sticker.empty:hover { background:#bfe0ff; }
+  .sticker.win { background:#fff3b0; box-shadow:0 0 0 3px var(--gold) inset; }
+  footer { padding:10px 12px 14px; background:var(--panel); border-top:1px solid #2c3140; }
+  #moves { display:grid; grid-template-columns:repeat(12, minmax(0,1fr)); gap:6px; max-width:760px; margin:0 auto 8px; }
+  #moves button { padding:10px 0; font-size:.95rem; font-weight:700; border:0; border-radius:6px; background:#3a4256; color:var(--text); cursor:pointer; }
+  #moves button:hover:enabled { background:#4d5a78; }
+  #moves button:disabled { opacity:.35; cursor:not-allowed; }
+  .row { display:flex; gap:12px; justify-content:center; align-items:center; flex-wrap:wrap; color:var(--muted); font-size:.85rem; }
+  #restart { padding:6px 14px; border-radius:6px; border:1px solid #4a5268; background:transparent; color:var(--text); cursor:pointer; }
+  #restart:hover { background:#2c3140; }
+  @media (max-width:600px){ #moves{ grid-template-columns:repeat(6, minmax(0,1fr)); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Rubik's Tic Tac Toe</h1>
+  <div id="status"></div>
+  <div id="hint"></div>
+</header>
+<div class="stage" id="stage"><div id="cube"></div></div>
+<footer>
+  <div id="moves" aria-label="Cube moves"></div>
+  <div class="row">
+    <span>Drag to rotate the cube view &middot; click a white sticker to place your mark &middot; then pick one face turn</span>
+    <button id="restart">New game</button>
+  </div>
+</footer>
+
+<script>
+(() => {
+  // ---------- Model ----------
+  // Each sticker: position p of its cubie, outward normal n, mark. Coordinates: x right, y up, z toward viewer.
+  const AXES = ['x', 'y', 'z'];
+  let stickers, turn, phase, winCells;
+
+  // 90deg rotation as applied by CSS rotateX/Y/Z(+90deg), expressed in model (y-up) coordinates.
+  function rot90(v, axis) {
+    const [x, y, z] = v;
+    if (axis === 0) return [x, z, -y];
+    if (axis === 1) return [z, y, -x];
+    return [y, -x, z];
+  }
+  function rot(v, axis, k) {
+    let r = v;
+    for (let i = 0; i < (((k % 4) + 4) % 4); i++) r = rot90(r, axis);
+    return r;
+  }
+
+  // Standard face turns (clockwise as seen looking at that face). k=+1 is CSS +90deg about the axis.
+  const BASE = {
+    U: { axis: 1, layer: 1, k: -1 }, D: { axis: 1, layer: -1, k: 1 },
+    R: { axis: 0, layer: 1, k: 1 },  L: { axis: 0, layer: -1, k: -1 },
+    F: { axis: 2, layer: 1, k: 1 },  B: { axis: 2, layer: -1, k: -1 },
+  };
+  const MOVES = [];
+  for (const f of 'UDLRFB') { MOVES.push({ name: f, ...BASE[f] }); }
+  for (const f of 'UDLRFB') { MOVES.push({ name: f + "'", ...BASE[f], k: -BASE[f].k }); }
+
+  function newGame() {
+    stickers = [];
+    let id = 0;
+    for (let a = 0; a < 3; a++) for (const s of [-1, 1]) {
+      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+        const p = [0, 0, 0], n = [0, 0, 0];
+        const [b, c] = [0, 1, 2].filter(t => t !== a);
+        p[a] = s; p[b] = i; p[c] = j; n[a] = s;
+        stickers.push({ id: id++, p, n, mark: null });
+      }
+    }
+    turn = 0; phase = 'place'; winCells = new Set();
+  }
+
+  function applyMove(m) {
+    for (const s of stickers) {
+      if (s.p[m.axis] === m.layer) { s.p = rot(s.p, m.axis, m.k); s.n = rot(s.n, m.axis, m.k); }
+    }
+  }
+
+  // Returns {X:bool, O:bool, cells:Set<id>} — lines of 3 on any single face.
+  function checkWins() {
+    const res = { X: false, O: false, cells: new Set() };
+    const LINES = [];
+    for (let i = 0; i < 3; i++) { LINES.push([[i,0],[i,1],[i,2]], [[0,i],[1,i],[2,i]]); }
+    LINES.push([[0,0],[1,1],[2,2]], [[0,2],[1,1],[2,0]]);
+    for (let a = 0; a < 3; a++) for (const s of [-1, 1]) {
+      const grid = [[null,null,null],[null,null,null],[null,null,null]];
+      const [b, c] = [0, 1, 2].filter(t => t !== a);
+      for (const st of stickers) if (st.n[a] === s) grid[st.p[b] + 1][st.p[c] + 1] = st;
+      for (const line of LINES) {
+        const cs = line.map(([i, j]) => grid[i][j]);
+        const m = cs[0].mark;
+        if (m && cs.every(x => x.mark === m)) { res[m] = true; cs.forEach(x => res.cells.add(x.id)); }
+      }
+    }
+    return res;
+  }
+
+  // ---------- View ----------
+  const stage = document.getElementById('stage');
+  const cubeEl = document.getElementById('cube');
+  let S = 80, elById = {};
+
+  const mul = (A, B) => A.map((_, i) => B[0].map((_, j) => A[i][0]*B[0][j] + A[i][1]*B[1][j] + A[i][2]*B[2][j]));
+  const Rx = t => { const c = Math.cos(t), s = Math.sin(t); return [[1,0,0],[0,c,-s],[0,s,c]]; };
+  const Ry = t => { const c = Math.cos(t), s = Math.sin(t); return [[c,0,s],[0,1,0],[-s,0,c]]; };
+  const rad = d => d * Math.PI / 180;
+  let view = mul(Rx(rad(-28)), Ry(rad(-38)));
+
+  function orthonormalize(M) {
+    const norm = v => { const l = Math.hypot(...v); return v.map(x => x / l); };
+    const r0 = norm(M[0]);
+    const d = M[1][0]*r0[0] + M[1][1]*r0[1] + M[1][2]*r0[2];
+    const r1 = norm(M[1].map((x, i) => x - d * r0[i]));
+    const r2 = [r0[1]*r1[2]-r0[2]*r1[1], r0[2]*r1[0]-r0[0]*r1[2], r0[0]*r1[1]-r0[1]*r1[0]];
+    return [r0, r1, r2];
+  }
+  function applyView() {
+    const m = view;
+    cubeEl.style.transform = `matrix3d(${m[0][0]},${m[1][0]},${m[2][0]},0,${m[0][1]},${m[1][1]},${m[2][1]},0,${m[0][2]},${m[1][2]},${m[2][2]},0,0,0,0,1)`;
+  }
+
+  const FACE_T = h => ({
+    '0,0,1':  `translateZ(${h}px)`,
+    '0,0,-1': `rotateY(180deg) translateZ(${h}px)`,
+    '1,0,0':  `rotateY(90deg) translateZ(${h}px)`,
+    '-1,0,0': `rotateY(-90deg) translateZ(${h}px)`,
+    '0,1,0':  `rotateX(90deg) translateZ(${h}px)`,
+    '0,-1,0': `rotateX(-90deg) translateZ(${h}px)`,
+  });
+  const cubiePos = p => `translate3d(${p[0]*S}px,${-p[1]*S}px,${p[2]*S}px)`;
+
+  function box(cls, size) {
+    const d = document.createElement('div');
+    d.className = cls;
+    d.style.width = d.style.height = size + 'px';
+    d.style.left = d.style.top = (-size / 2) + 'px';
+    return d;
+  }
+
+  function paintSticker(el, st) {
+    el.className = 'sticker' + (st.mark ? ' ' + st.mark : ' empty') + (winCells.has(st.id) ? ' win' : '');
+    el.textContent = st.mark || '';
+  }
+
+  function render() {
+    cubeEl.innerHTML = '';
+    elById = {};
+    const FT = FACE_T(S / 2), ST = FACE_T(S / 2 + 0.6);
+    const byPos = new Map();
+    for (const st of stickers) { const k = st.p.join(','); (byPos.get(k) || byPos.set(k, []).get(k)).push(st); }
+    for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (let z = -1; z <= 1; z++) {
+      if (!x && !y && !z) continue;
+      const cubie = document.createElement('div');
+      cubie.className = 'cubie';
+      cubie.dataset.p = [x, y, z].join(',');
+      cubie.style.transform = cubiePos([x, y, z]);
+      for (const key in FT) { const f = box('face', S); f.style.transform = FT[key]; cubie.appendChild(f); }
+      for (const st of byPos.get([x, y, z].join(',')) || []) {
+        const el = box('sticker', S * 0.84);
+        el.style.transform = ST[st.n.join(',')];
+        el.style.fontSize = (S * 0.5) + 'px';
+        el.dataset.id = st.id;
+        paintSticker(el, st);
+        elById[st.id] = el;
+        cubie.appendChild(el);
+      }
+      cubeEl.appendChild(cubie);
+    }
+    applyView();
+  }
+
+  function fit() {
+    const r = stage.getBoundingClientRect();
+    S = Math.max(46, Math.min(96, Math.min(r.width, r.height) / 4));
+    render();
+  }
+
+  // ---------- UI ----------
+  const statusEl = document.getElementById('status');
+  const hintEl = document.getElementById('hint');
+  const movesEl = document.getElementById('moves');
+  const who = t => `<span class="${t ? 'o' : 'x'}">Player ${t + 1} (${t ? 'O' : 'X'})</span>`;
+
+  for (const m of MOVES) {
+    const b = document.createElement('button');
+    b.textContent = m.name; b.title = `Turn ${m.name[0]} face ${m.name[1] ? 'counter-clockwise' : 'clockwise'}`;
+    b.addEventListener('click', () => doMove(m));
+    movesEl.appendChild(b);
+  }
+
+  function updateUI(msg) {
+    stage.classList.toggle('place', phase === 'place');
+    for (const b of movesEl.children) b.disabled = phase !== 'move';
+    if (msg) { statusEl.innerHTML = msg; hintEl.textContent = 'Press "New game" to play again.'; return; }
+    if (phase === 'place') { statusEl.innerHTML = `${who(turn)}: place your mark on any empty sticker`; hintEl.textContent = 'Step 1 of 2'; }
+    else if (phase === 'move') { statusEl.innerHTML = `${who(turn)}: now make exactly one cube move`; hintEl.textContent = 'Step 2 of 2 — wins are checked after the move'; }
+    else { statusEl.innerHTML = `${who(turn)}: turning…`; hintEl.textContent = ''; }
+  }
+
+  function onSticker(id) {
+    if (phase !== 'place') return;
+    const st = stickers[id];
+    if (st.mark) return;
+    st.mark = turn ? 'O' : 'X';
+    paintSticker(elById[id], st);
+    phase = 'move';
+    updateUI();
+  }
+
+  function doMove(m) {
+    if (phase !== 'move') return;
+    phase = 'animating'; updateUI();
+    const group = document.createElement('div');
+    group.className = 'group';
+    for (const c of [...cubeEl.children]) {
+      const p = c.dataset.p.split(',').map(Number);
+      if (p[m.axis] === m.layer) group.appendChild(c);
+    }
+    cubeEl.appendChild(group);
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const dur = reduce ? 0 : 380;
+    group.getBoundingClientRect();
+    group.style.transition = `transform ${dur}ms ease-in-out`;
+    group.style.transform = `rotate${AXES[m.axis].toUpperCase()}(${m.k * 90}deg)`;
+    setTimeout(() => { applyMove(m); render(); afterMove(); }, dur + 30);
+  }
+
+  function afterMove() {
+    const w = checkWins();
+    if (w.X || w.O) {
+      winCells = w.cells; phase = 'over'; render();
+      const msg = w.X && w.O
+        ? 'Both players completed a line on the same move — it\'s a draw!'
+        : `${who(w.X ? 0 : 1)} wins with three in a row! (rotate the cube to find the highlighted line)`;
+      updateUI(msg); return;
+    }
+    if (stickers.every(s => s.mark)) { phase = 'over'; updateUI('Every sticker is marked and nobody has a line — draw!'); return; }
+    turn ^= 1; phase = 'place'; updateUI();
+  }
+
+  // ---------- Drag to rotate / click to place ----------
+  let down = null;
+  stage.addEventListener('pointerdown', e => {
+    down = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, target: e.target, drag: false };
+    stage.setPointerCapture(e.pointerId);
+  });
+  stage.addEventListener('pointermove', e => {
+    if (!down) return;
+    if (!down.drag && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) down.drag = true;
+    if (!down.drag) return;
+    const dx = e.clientX - down.lx, dy = e.clientY - down.ly;
+    down.lx = e.clientX; down.ly = e.clientY;
+    view = orthonormalize(mul(mul(Rx(-dy * 0.01), Ry(dx * 0.01)), view));
+    applyView();
+  });
+  const end = e => {
+    if (!down) return;
+    const d = down; down = null;
+    if (!d.drag && e.type === 'pointerup') {
+      const s = d.target.closest && d.target.closest('.sticker');
+      if (s) onSticker(Number(s.dataset.id));
+    }
+  };
+  stage.addEventListener('pointerup', end);
+  stage.addEventListener('pointercancel', end);
+
+  document.getElementById('restart').addEventListener('click', () => {
+    if (phase === 'animating') return;
+    newGame(); render(); updateUI();
+  });
+  window.addEventListener('resize', fit);
+
+  newGame(); fit(); updateUI();
+})();
+</script>
+</body>
+</html>

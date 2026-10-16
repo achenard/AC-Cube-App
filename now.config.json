@@ -1,0 +1,16 @@
+{
+  "scope": "x_snc_octbuildex",
+  "scopeId": "0fed6a9da1ce403b87a2f5fc2f8dfb35",
+  "name": "OctBuildEx",
+  "metadataDir": "src/plugin-xmls",
+  "appOutputDir": "dist-metadata/app",
+  "packageSourceCodeOnInstance": true,
+  "staticContent": {
+    "assets": {
+      "./public/**": {
+        "publicPath": "[$config.aiux.basename]/public"
+      }
+    }
+  },
+  "tsconfigPath": "./src/server/tsconfig.json"
+}
